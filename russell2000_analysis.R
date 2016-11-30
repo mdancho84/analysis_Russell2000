@@ -9,6 +9,8 @@ library(modelr)
 library(plotly)
 
 
+######################################## Part 1 ################################
+
 # Web Scraping: Get the List of Russell 2000 Stocks ----------------------------
 
 # Base path and page rows from www.marketvolume.com
@@ -117,13 +119,9 @@ stocklist <- stocklist %>%
 # Stop the clock
 proc.time() - ptm
 
-# user  system elapsed 
-# 524.18   12.36  790.16
-
-
 
 # Visualize the Relationship between Std Dev and Mean --------------------------
-trade_day_thresh <- 1500
+trade_day_thresh <- max(stocklist$n.trade.days)
 sd_limit <- 0.075
 stocklist %>%
     filter(n.trade.days >= trade_day_thresh,
@@ -131,37 +129,40 @@ stocklist %>%
     ggplot(aes(x = sd.log.returns, y = mean.log.returns)) +
     geom_point(alpha = 0.1) +
     geom_smooth() +
-    labs(title = "Market Tends to Penalize Stocks with Large Std Dev",
-         subtitle = "Best to Focus on Stocks with Highest Reward to Risk Ratio",
-         x = "Standard Deviation of Log Returns",
-         y = "Mean of Log Returns")
+    labs(title = "Market Tends to Penalize Stocks with Large SDDLR",
+         subtitle = "Best to Focus on Stocks with Highest Ratio of MDLR to SDDLR",
+         x = "Standard Deviation of Daily Log Returns (SDDLR)",
+         y = "Mean Daily Log Returns (MDLR)")
 
 
-# Develop Reward-to-Risk Ratio -------------------------------------------------
+# Develop Reward-to-Risk Metric ------------------------------------------------
 stocklist <- stocklist %>%
-    mutate(reward.ratio = (mean.log.returns * n.trade.days) / sd.log.returns)
+    mutate(reward.metric = (mean.log.returns * n.trade.days) / sd.log.returns)
 
 
 # Visualize the Results with Plotly --------------------------------------------
-trade_day_thresh <- 1500
+
+# Inputs
+trade_day_thresh <- max(stocklist$n.trade.days)
 lab <- "Russell 2000"
 back_col <- '#2C3E50'
 font_col <- '#FFFFFF'
 line_col <- "#FFFFFF"
 grid_col <- 'rgb(255, 255, 255)'
 col_brew_pal <- 'BrBG'
+# Plotly
 plot_ly(data   = stocklist %>% filter(n.trade.days >= trade_day_thresh),
         type   = "scatter",
         mode   = "markers",
         x      = ~ sd.log.returns,
         y      = ~ mean.log.returns,
-        color  = ~ reward.ratio,
+        color  = ~ reward.metric,
         colors = col_brew_pal,
-        size   = ~ reward.ratio,
+        size   = ~ reward.metric,
         text   = ~ str_c("<em>", company, "</em><br>",
                          "Ticker: ", symbol, "<br>",
                          "No. of Trading Days: ", n.trade.days, "<br>",
-                         "Reward to Risk: ", round(reward.ratio, 1)),
+                         "Reward to Risk: ", round(reward.metric, 1)),
         marker = list(opacity = 0.8,
                       symbol = 'circle',
                       sizemode = 'diameter',
@@ -169,12 +170,12 @@ plot_ly(data   = stocklist %>% filter(n.trade.days >= trade_day_thresh),
                       line = list(width = 2, color = line_col))
 ) %>%
     layout(title   = str_c(lab, 'Analysis: Stock Risk vs Reward', sep = " "),
-           xaxis   = list(title = 'Risk: StDev Log Returns',
+           xaxis   = list(title = 'Risk: StDev of Daily Log Returns (SDDLR)',
                           gridcolor = grid_col,
                           zerolinewidth = 1,
                           ticklen = 5,
                           gridwidth = 2),
-           yaxis   = list(title = 'Reward: Mean Log Returns',
+           yaxis   = list(title = 'Reward: Mean Daily Log Returns (MDLR)',
                           gridcolor = grid_col,
                           zerolinewidth = 1,
                           ticklen = 5,
@@ -187,51 +188,98 @@ plot_ly(data   = stocklist %>% filter(n.trade.days >= trade_day_thresh),
            plot_bgcolor = back_col)
 
 
+######################################## Part 2 ################################
 
-# Trim List to Top 6 High Performing -------------------------------------------
+# Trim List to Top 15 High Performers ------------------------------------------
 
 # Filter high performing stocks
 top_n_limit <- 15
 hp <- stocklist %>%
-    mutate(rank = reward.ratio %>% desc() %>% min_rank()) %>%
+    mutate(rank = reward.metric %>% desc() %>% min_rank()) %>%
     filter(rank <= top_n_limit) %>%
-    arrange(rank) %>%
-    select(symbol, rank, reward.ratio, mean.log.returns, sd.log.returns, n.trade.days, log.returns)
-hp
+    arrange(rank)
+
+# Function to return MDLR by year
+means_by_year <- function(log.returns) {
+    log.returns %>%
+        mutate(year = year(Date)) %>%
+        group_by(year) %>%
+        summarize(mean.log.returns = mean(Log.Returns))
+}
+# Map function to data frame
+hp <- hp %>%
+    mutate(means.by.year = map(log.returns, means_by_year))
 
 # Unnest high performing stocks
 hp_unnest <- hp %>%
-    select(symbol, log.returns) %>%
+    select(symbol, means.by.year) %>%
     unnest()
-hp_unnest
-
-# Get mean log returns by year
-hp_means_by_year <- hp_unnest %>%
-    mutate(year = year(Date)) %>%
-    group_by(symbol, year) %>%
-    summarize(mean.log.returns = mean(Log.Returns))
-hp_means_by_year
 
 # Visualize using ggplot
-hp_means_by_year %>%
+hp_unnest %>%
     ggplot(aes(x = year, y = mean.log.returns)) +
     geom_ref_line(h = 0) +
     geom_line(aes(col = symbol)) +
     geom_smooth(method = "lm", se = FALSE) +
     facet_wrap(~ symbol, nrow = 3) +
     theme(legend.position = "None", axis.text.x = element_text(angle=90)) +
-    labs(title = "Best Prospects Have Consistent, Above-Zero MDLR",
-         subtitle = "Stocks to Watch: CMN, EXPO, HIFS, LANC, NATH, PLUS",
+    labs(title = "Best Prospects Have Consistent, Above-Zero MDLR and Growth",
+         subtitle = "Trend Flat to Upward Indicates Growth",
          x = "Year",
-         y = "Mean Daily Log Returns")
+         y = "Mean Daily Log Returns (MDLR)")
 
 
-# Review Stocks to Watch -------------------------------------------------------
+# Compute Three Attributes of High Performing Stocks ---------------------------
 
-top_stocks <- c("CMN", "EXPO", "HIFS", "LANC", "NATH", "PLUS")
+# Attribute 1: Number of Times MDLR by Year Drops Below Zero
+# Function to return number of times a stock's MDLR by year drops below zero
+means_below_zero <- function(means.by.year) {
+    means.by.year %>%
+        filter(mean.log.returns < 0) %>%
+        nrow()
+}
+# Map function to data frame for all stocks
+hp <- hp %>%
+    mutate(means.below.zero = map_dbl(means.by.year, means_below_zero))
 
-stocklist %>%
-    filter(symbol %in% top_stocks) %>%
+
+# Attribute 2: Slope of MDLR by Year
+# Function to return linear model
+means_by_year_model <- function(means.by.year) {
+    lm(mean.log.returns ~ year, data = means.by.year)
+}
+# Function to return slope of linear model
+slope <- function(means.by.year.model) {
+    means.by.year.model$coefficients[[2]]
+}
+# Map modeling and slope functions
+hp <- hp %>%
+    mutate(
+        means.by.year.model = map(means.by.year, means_by_year_model),
+        slope = map_dbl(means.by.year.model, slope)
+    )
+
+# Attribute 3: Standard deviation of MDLR by year
+sd_of_means_by_year <- function(means.by.year) {
+    sd(means.by.year$mean.log.returns)
+}
+# Map to data frame
+hp <- hp %>%
+    mutate(sd.of.means.by.year = map_dbl(means.by.year, sd_of_means_by_year))
+
+
+# Develop Growth-to-Consistency Metric -----------------------------------------
+
+hp <- hp %>%
+    mutate(growth.metric = slope /((means.below.zero + 1) * sd.of.means.by.year)) 
+
+
+# Visualize Performance of Top Six Stocks --------------------------------------
+
+top_n_limit <- 6
+hp %>%
+    mutate(rank = growth.metric %>% desc() %>% min_rank()) %>%
+    filter(rank <= top_n_limit) %>%
     select(symbol, stock.prices) %>%
     unnest() %>%
     ggplot(aes(x = Date, y = Adjusted, col = symbol)) +
@@ -239,10 +287,6 @@ stocklist %>%
     facet_wrap(~ symbol, nrow = 3, scales = "free_y") +
     theme(legend.position = "None") +
     labs(title = "Prospecting Best Russell 2000 Stocks",
-         subtitle = "Six Small Caps with Amazing Growth, Lowest Risk",
+         subtitle = "Six Small Caps with Amazing Growth, Most Consistency",
          x = "Year",
          y = "Price per Share")
-
-
-
-
